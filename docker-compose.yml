@@ -1,0 +1,11 @@
+services:
+  app:
+    build: .
+    container_name: gerador-video
+    env_file:
+      - .env
+    volumes:
+      # Mapeia a pasta local 'tmp' para dentro do container
+      # Assim, os vídeos gerados aparecem na sua EC2, fora do container
+      - ./tmp:/app/tmp
+    restart: on-failure
