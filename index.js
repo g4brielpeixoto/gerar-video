@@ -17,10 +17,6 @@ const S3_VIDEOS_PRONTOS_DIR = 'biblia/videos/prontos/';
 
 const s3Client = new S3Client({
   region: S3_REGION,
-  credentials: {
-    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-  },
 });
 
 const STATE_FILE = './state.json';
@@ -107,7 +103,7 @@ async function rotateApiKey() {
 
 async function ensureQuota(textLength) {
   try {
-    const subscription = await elevenlabs.user.getSubscription();
+    const subscription = await elevenlabs.user.getSubscriptionInfo();
     const remaining = subscription.character_limit - subscription.character_count;
     
     if (remaining < textLength) {
