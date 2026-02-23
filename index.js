@@ -56,6 +56,7 @@ function getApiKeys() {
 
 const API_KEYS = getApiKeys();
 if (API_KEYS.length === 0) {
+  console.error('❌ Nenhuma API Key encontrada.');
   process.exit(1);
 }
 
@@ -64,14 +65,16 @@ let elevenlabs;
 
 async function initElevenLabs(index) {
   currentApiKeyIndex = index;
+  console.log(`🔑 Chave #${currentApiKeyIndex}`);
   elevenlabs = new ElevenLabsClient({ apiKey: API_KEYS[currentApiKeyIndex] });
 }
 
 async function rotateApiKey() {
   currentApiKeyIndex++;
   if (currentApiKeyIndex >= API_KEYS.length) {
-    throw new Error('Todas as chaves de API foram esgotadas.');
+    throw new Error('❌ Todas as chaves esgotadas.');
   }
+  console.log(`🔄 Trocando para chave #${currentApiKeyIndex}...`);
   await initElevenLabs(currentApiKeyIndex);
   const state = await loadState();
   state.apiKeyIndex = currentApiKeyIndex;
@@ -80,8 +83,8 @@ async function rotateApiKey() {
 
 async function ensureQuota(textLength) {
   try {
-    const subscription = await elevenlabs.user.subscription.get();
-    const remaining = subscription.character_limit - subscription.character_count;
+    const sub = await elevenlabs.user.subscription.get();
+    const remaining = sub.character_limit - sub.character_count;
     if (remaining < textLength) {
       await rotateApiKey();
       return await ensureQuota(textLength);
@@ -124,12 +127,8 @@ async function loadState() {
       apiKeyIndex: state.apiKeyIndex || 0
     };
   } catch (err) {
-    if (err.name === 'NoSuchKey') {
-      return { book: 0, chapter: 0, apiKeyIndex: 0 };
-    }
-    if (fs.existsSync(STATE_FILE)) {
-      return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
-    }
+    if (err.name === 'NoSuchKey') return { book: 0, chapter: 0, apiKeyIndex: 0 };
+    if (fs.existsSync(STATE_FILE)) return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
     return { book: 0, chapter: 0, apiKeyIndex: 0 };
   }
 }
@@ -147,26 +146,19 @@ async function saveState(state) {
 }
 
 function getNextChapter(state) {
-  if (state.book >= bible.length) {
-    process.exit(0);
-  }
+  if (state.book >= bible.length) process.exit(0);
   const book = bible[state.book];
-  const verses = book.chapters[state.chapter];
   return {
     bookIndex: state.book,
     chapterIndex: state.chapter,
     bookName: book.name,
     chapterNumber: state.chapter + 1,
-    verses: verses
+    verses: book.chapters[state.chapter]
   };
 }
 
-async function advanceState(chapterInfo, currentApiKeyIndex) {
-  const state = { 
-    book: chapterInfo.bookIndex, 
-    chapter: chapterInfo.chapterIndex,
-    apiKeyIndex: currentApiKeyIndex 
-  };
+async function advanceState(chapterInfo, apiKeyIndex) {
+  const state = { book: chapterInfo.bookIndex, chapter: chapterInfo.chapterIndex, apiKeyIndex };
   const book = bible[state.book];
   state.chapter++;
   if (state.chapter >= book.chapters.length) {
@@ -182,8 +174,7 @@ function wrapTextCanvas(ctx, text, maxWidth) {
   let currentLine = '';
   for (const word of words) {
     const testLine = currentLine + (currentLine ? ' ' : '') + word;
-    const metrics = ctx.measureText(testLine);
-    if (metrics.width > maxWidth && currentLine !== '') {
+    if (ctx.measureText(testLine).width > maxWidth && currentLine !== '') {
       lines.push(currentLine);
       currentLine = word;
     } else {
@@ -197,39 +188,24 @@ function wrapTextCanvas(ctx, text, maxWidth) {
 function splitIntoSlides(chapterInfo) {
   const canvas = createCanvas(VIDEO_WIDTH, VIDEO_HEIGHT);
   const ctx = canvas.getContext('2d');
-  ctx.font = `${FONT_SIZE}px Arial, sans-serif`;
+  ctx.font = `${FONT_SIZE}px Arial`;
   const slides = [];
   let currentDisplayVerses = [];
   let currentReadVerses = [];
-  const titleText = `${chapterInfo.bookName} ${chapterInfo.chapterNumber}`;
+  const title = `${chapterInfo.bookName} ${chapterInfo.chapterNumber}`;
   for (let i = 0; i < chapterInfo.verses.length; i++) {
-    const verseNum = i + 1;
-    const verseText = chapterInfo.verses[i];
-    const displayVerse = `(${verseNum}) ${verseText}`;
-    const fullDisplayText = [...currentDisplayVerses, displayVerse].join(' ');
-    const lines = wrapTextCanvas(ctx, fullDisplayText, MAX_WIDTH);
-    const textHeight = lines.length * LINE_HEIGHT;
-    const availableHeight = VIDEO_HEIGHT - SAFE_TOP - SAFE_BOTTOM - TITLE_FONT_SIZE - TITLE_SPACING;
-    if (textHeight > availableHeight && currentDisplayVerses.length > 0) {
-      slides.push({
-        title: titleText,
-        textToDisplay: currentDisplayVerses.join(' '),
-        textToRead: currentReadVerses.join(' ')
-      });
+    const displayVerse = `(${i + 1}) ${chapterInfo.verses[i]}`;
+    const lines = wrapTextCanvas(ctx, [...currentDisplayVerses, displayVerse].join(' '), MAX_WIDTH);
+    if ((lines.length * LINE_HEIGHT) > (VIDEO_HEIGHT - SAFE_TOP - SAFE_BOTTOM - TITLE_FONT_SIZE - TITLE_SPACING) && currentDisplayVerses.length > 0) {
+      slides.push({ title, textToDisplay: currentDisplayVerses.join(' '), textToRead: currentReadVerses.join(' ') });
       currentDisplayVerses = [displayVerse];
-      currentReadVerses = [verseText];
+      currentReadVerses = [chapterInfo.verses[i]];
     } else {
       currentDisplayVerses.push(displayVerse);
-      currentReadVerses.push(verseText);
+      currentReadVerses.push(chapterInfo.verses[i]);
     }
   }
-  if (currentDisplayVerses.length > 0) {
-    slides.push({
-      title: titleText,
-      textToDisplay: currentDisplayVerses.join(' '),
-      textToRead: currentReadVerses.join(' ')
-    });
-  }
+  if (currentDisplayVerses.length > 0) slides.push({ title, textToDisplay: currentDisplayVerses.join(' '), textToRead: currentReadVerses.join(' ') });
   return slides;
 }
 
@@ -238,12 +214,12 @@ function gerarImagemSlide(slide, index) {
   const ctx = canvas.getContext('2d');
   ctx.fillStyle = '#000000';
   ctx.fillRect(0, 0, VIDEO_WIDTH, VIDEO_HEIGHT);
-  ctx.font = `bold ${TITLE_FONT_SIZE}px Arial, sans-serif`;
+  ctx.font = `bold ${TITLE_FONT_SIZE}px Arial`;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'top';
   ctx.fillStyle = '#FFD700';
   ctx.fillText(slide.title, SAFE_LEFT, SAFE_TOP);
-  ctx.font = `${FONT_SIZE}px Arial, sans-serif`;
+  ctx.font = `${FONT_SIZE}px Arial`;
   const lines = wrapTextCanvas(ctx, slide.textToDisplay, MAX_WIDTH);
   let y = SAFE_TOP + TITLE_FONT_SIZE + TITLE_SPACING;
   ctx.fillStyle = TEXT_COLOR;
@@ -257,32 +233,33 @@ function gerarImagemSlide(slide, index) {
 }
 
 async function gerarAudioSlide(text, index) {
-  const audioNarracaoPath = path.join(TMP_DIR, `raw_${index}.mp3`);
-  const audioFinalPath = path.join(TMP_DIR, `audio_${index}.mp3`);
-  await ensureQuota(text.length);
-  const audioStream = await elevenlabs.textToSpeech.convert(VOICE_ID, {
-    text: text,
-    modelId: MODEL_ID,
-    outputFormat: 'mp3_44100_128',
-  });
-  const writeStream = fs.createWriteStream(audioNarracaoPath);
-  for await (const chunk of audioStream) {
-    writeStream.write(chunk);
+  try {
+    const audioNarracaoPath = path.join(TMP_DIR, `raw_${index}.mp3`);
+    const audioFinalPath = path.join(TMP_DIR, `audio_${index}.mp3`);
+    await ensureQuota(text.length);
+    const audioStream = await elevenlabs.textToSpeech.convert(VOICE_ID, {
+      text: text,
+      modelId: MODEL_ID,
+      outputFormat: 'mp3_44100_128',
+    });
+    const writeStream = fs.createWriteStream(audioNarracaoPath);
+    for await (const chunk of audioStream) writeStream.write(chunk);
+    writeStream.end();
+    await new Promise(resolve => writeStream.on('finish', resolve));
+    const silIni = path.join(TMP_DIR, `sil_ini_${index}.mp3`);
+    const silFin = path.join(TMP_DIR, `sil_fin_${index}.mp3`);
+    execSync(`ffmpeg -y -f lavfi -i anullsrc=r=44100:cl=stereo -t ${PAUSA_INICIAL} -q:a 9 "${silIni}"`, { stdio: 'ignore' });
+    execSync(`ffmpeg -y -f lavfi -i anullsrc=r=44100:cl=stereo -t ${PAUSA_FINAL} -q:a 9 "${silFin}"`, { stdio: 'ignore' });
+    const listFile = path.join(TMP_DIR, `list_${index}.txt`);
+    fs.writeFileSync(listFile, `file '${path.resolve(silIni)}'\nfile '${path.resolve(audioNarracaoPath)}'\nfile '${path.resolve(silFin)}'`);
+    execSync(`ffmpeg -y -f concat -safe 0 -i "${listFile}" -c copy "${audioFinalPath}"`, { stdio: 'ignore' });
+    fs.unlinkSync(audioNarracaoPath); fs.unlinkSync(silIni); fs.unlinkSync(silFin); fs.unlinkSync(listFile);
+    return audioFinalPath;
+  } catch (err) {
+    console.error(`⚠️ Erro no áudio: ${err.message}`);
+    await rotateApiKey();
+    return await gerarAudioSlide(text, index);
   }
-  writeStream.end();
-  await new Promise(resolve => writeStream.on('finish', resolve));
-  const silIni = path.join(TMP_DIR, `sil_ini_${index}.mp3`);
-  const silFin = path.join(TMP_DIR, `sil_fin_${index}.mp3`);
-  execSync(`ffmpeg -y -f lavfi -i anullsrc=r=44100:cl=stereo -t ${PAUSA_INICIAL} -q:a 9 "${silIni}"`, { stdio: 'ignore' });
-  execSync(`ffmpeg -y -f lavfi -i anullsrc=r=44100:cl=stereo -t ${PAUSA_FINAL} -q:a 9 "${silFin}"`, { stdio: 'ignore' });
-  const listFile = path.join(TMP_DIR, `list_${index}.txt`);
-  fs.writeFileSync(listFile, `file '${path.resolve(silIni)}'\nfile '${path.resolve(audioNarracaoPath)}'\nfile '${path.resolve(silFin)}'`);
-  execSync(`ffmpeg -y -f concat -safe 0 -i "${listFile}" -c copy "${audioFinalPath}"`, { stdio: 'ignore' });
-  fs.unlinkSync(audioNarracaoPath);
-  fs.unlinkSync(silIni);
-  fs.unlinkSync(silFin);
-  fs.unlinkSync(listFile);
-  return audioFinalPath;
 }
 
 function getAudioDuration(audioPath) {
@@ -291,26 +268,19 @@ function getAudioDuration(audioPath) {
 }
 
 async function main() {
-  if (fs.existsSync(TMP_DIR)) {
-    fs.readdirSync(TMP_DIR).forEach(f => fs.unlinkSync(path.join(TMP_DIR, f)));
-  }
+  if (fs.existsSync(TMP_DIR)) fs.readdirSync(TMP_DIR).forEach(f => fs.unlinkSync(path.join(TMP_DIR, f)));
   const state = await loadState();
   await initElevenLabs(state.apiKeyIndex || 0);
   const chapterInfo = getNextChapter(state);
+  console.log(`📖 ${chapterInfo.bookName} ${chapterInfo.chapterNumber}`);
   const slides = splitIntoSlides(chapterInfo);
-  const imagePaths = [];
-  const audioPaths = [];
-  const durations = [];
+  const imagePaths = [], audioPaths = [], durations = [];
   for (let i = 0; i < slides.length; i++) {
-    const imgPath = gerarImagemSlide(slides[i], i);
-    const textoParaNarrar = i === 0 
-      ? `${slides[i].title}. ${slides[i].textToRead}`
-      : slides[i].textToRead;
-    const audPath = await gerarAudioSlide(textoParaNarrar, i);
-    const duration = getAudioDuration(audPath);
-    imagePaths.push(imgPath);
+    imagePaths.push(gerarImagemSlide(slides[i], i));
+    const audPath = await gerarAudioSlide(i === 0 ? `${slides[i].title}. ${slides[i].textToRead}` : slides[i].textToRead, i);
     audioPaths.push(audPath);
-    durations.push(duration);
+    durations.push(getAudioDuration(audPath));
+    console.log(`  ✅ Slide ${i + 1}/${slides.length}`);
   }
   const finalAudioPath = path.join(TMP_DIR, 'final_audio.mp3');
   const audioListFile = path.join(TMP_DIR, 'audio_list.txt');
@@ -318,22 +288,14 @@ async function main() {
   execSync(`ffmpeg -y -f concat -safe 0 -i "${audioListFile}" -c copy "${finalAudioPath}"`, { stdio: 'ignore' });
   const imageListFile = path.join(TMP_DIR, 'image_list.txt');
   let imageListContent = '';
-  for (let i = 0; i < imagePaths.length; i++) {
-    imageListContent += `file '${path.resolve(imagePaths[i])}'\nduration ${durations[i]}\n`;
-  }
+  for (let i = 0; i < imagePaths.length; i++) imageListContent += `file '${path.resolve(imagePaths[i])}'\nduration ${durations[i]}\n`;
   imageListContent += `file '${path.resolve(imagePaths[imagePaths.length - 1])}'\n`;
   fs.writeFileSync(imageListFile, imageListContent);
   const outputFilename = `${chapterInfo.bookName}_${chapterInfo.chapterNumber}_${Date.now()}.mp4`.replace(/\s+/g, '_');
   const outputPath = path.join(OUTPUT_DIR, outputFilename);
-  const cmd = `ffmpeg -y -f concat -safe 0 -i "${imageListFile}" -i "${finalAudioPath}" -c:v libx264 -pix_fmt yuv420p -r 30 -c:a aac -b:a 192k -shortest "${outputPath}"`;
-  execSync(cmd, { stdio: 'inherit' });
+  execSync(`ffmpeg -y -f concat -safe 0 -i "${imageListFile}" -i "${finalAudioPath}" -c:v libx264 -pix_fmt yuv420p -r 30 -c:a aac -b:a 192k -shortest "${outputPath}"`, { stdio: 'inherit' });
   await uploadVideoToS3(outputPath, outputFilename);
   await advanceState(chapterInfo, currentApiKeyIndex);
-  if (fs.existsSync(TMP_DIR)) {
-    fs.readdirSync(TMP_DIR).forEach(f => fs.unlinkSync(path.join(TMP_DIR, f)));
-  }
 }
 
-main().catch(err => {
-  console.error(err);
-});
+main().catch(err => console.error(err));
