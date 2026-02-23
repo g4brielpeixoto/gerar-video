@@ -1,0 +1,19 @@
+{
+  "name": "biblia",
+  "version": "1.0.0",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.995.0",
+    "@elevenlabs/elevenlabs-js": "^2.33.0",
+    "canvas": "^3.2.1",
+    "dotenv": "^17.3.1"
+  }
+}
