@@ -1,8 +1,9 @@
 # Usa uma imagem base do Node (Debian-based é melhor para compatibilidade com canvas)
 FROM node:20-slim
 
-# Instala as dependências do sistema necessárias para o node-canvas
+# Instala as dependências do sistema necessárias para o node-canvas e ffmpeg
 RUN apt-get update && apt-get install -y \
+    ffmpeg \
     build-essential \
     libcairo2-dev \
     libpango1.0-dev \
